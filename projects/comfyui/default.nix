@@ -10,6 +10,7 @@ in {
     config,
     pkgs,
     lib,
+    self',
     ...
   }: let
     commonOverlays = [
@@ -59,7 +60,36 @@ in {
         inherit sha256;
         url = "https://huggingface.co/${owner}/${repo}/resolve/${rev}/${resource}";
       };
-    models = import ./models {inherit fetchFromHuggingFace;};
+
+    # declare models as simply as:
+    # "loras/example.safetensors" = { air = "urn:air:flux1:lora:civitai:<id>@<version>"; sha256 = "<hash>"; };
+    # both AIR and sha256 is available on the civitai page of a model
+    # AFAIK only civitai implements the spec as of now
+    installByAir = let
+      stripExt = name: builtins.concatStringsSep "" (builtins.match "(.+)\\..+" name);
+    in
+      attrs:
+        builtins.listToAttrs (lib.mapAttrsToList (installPath: {
+            air,
+            sha256,
+            authToken ? null,
+          } @ args: let
+            src = self'.legacyPackages.fetchair args;
+            value = {
+              inherit installPath src;
+              # TODO: use AIR spec classification?
+              base = src.meta.ecosystem;
+              type = src.meta.format;
+            };
+          in {
+            # "loras/some-flux1-lora-v1.safetensors" => some-flux1-lora-v1
+            name = stripExt (baseNameOf installPath);
+            inherit value;
+          })
+        attrs);
+    models = import ./models {
+      inherit fetchFromHuggingFace installByAir;
+    };
 
     # we require a python3 with an appropriately overriden package set depending on GPU
     mkComfyUIVariant = python3: args:
@@ -82,7 +112,7 @@ in {
   in {
     legacyPackages.comfyui = {
       inherit amd nvidia;
-      inherit fetchFromHuggingFace;
+      inherit fetchFromHuggingFace installByAir;
       inherit (import ./models/meta.nix) base-models model-types;
       inherit models kritaModels;
     };
